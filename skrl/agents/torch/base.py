@@ -397,7 +397,10 @@ class Agent:
 
         :param path: Path to load the model from
         :type path: str
-        :init_log_std: initial log standard deviation
+        
+        :param init_log_std: if None, the log standard deviation will be loaded directly from 
+        the checkpoint, otherwise the initial log standard deviation will be set to the specified
+        value. 
         """
         modules = torch.load(path, map_location=self.device)
         if init_log_std is not None:
