@@ -355,27 +355,89 @@ class Agent:
             modules[name] = self._get_internal_value(module)
         torch.save(modules, path)
 
-    def load(self, path: str) -> None:
-        """Load the model from the specified path
+    def load(self, path: str, init_log_std=None) -> None:
+        """Load the model from the specified path with specified initial log standard deviation
 
         The final storage device is determined by the constructor of the model
 
         :param path: Path to load the model from
         :type path: str
+        
+        :param init_log_std: if None, the log standard deviation will be loaded directly from 
+        the checkpoint, otherwise the initial log standard deviation will be set to the specified
+        value. 
         """
         modules = torch.load(path, map_location=self.device)
+        if init_log_std is not None:
+            modules["policy"]["log_std_parameter"][:] = init_log_std
+            modules["value"]["log_std_parameter"][:] = init_log_std
         if type(modules) is dict:
             for name, data in modules.items():
                 module = self.checkpoint_modules.get(name, None)
                 if module is not None:
                     if hasattr(module, "load_state_dict"):
-                        module.load_state_dict(data)
+                        # Only load those owned by module as well as data
+                        model_dict = module.state_dict()
+                        pretrained_dict = model_dict.copy()# {k: v for k, v in data.items() if k in model_dict}
+                        pretrained_dict = {k: v for k, v in data.items() if k in model_dict and k in data}
+
+                        # module.load_state_dict(pretrained_dict)
+                        module.load_state_dict(pretrained_dict)
                         if hasattr(module, "eval"):
                             module.eval()
                     else:
                         raise NotImplementedError
                 else:
                     logger.warning(f"Cannot load the {name} module. The agent doesn't have such an instance")
+
+    def load_policy_only(self, path: str, init_log_std=None) -> None:
+        """Load the model but without the optimizer from the specified path
+
+        The final storage device is determined by the constructor of the model
+
+        :param path: Path to load the model from
+        :type path: str
+        :init_log_std: initial log standard deviation
+        """
+        modules = torch.load(path, map_location=self.device)
+        if init_log_std is not None:
+            modules["policy"]["log_std_parameter"][:] = init_log_std
+            modules["value"]["log_std_parameter"][:] = init_log_std
+        if type(modules) is dict:
+            for name, data in modules.items():
+                if name != "optimizer" and name != "value":
+                    module = self.checkpoint_modules.get(name, None)
+                    if module is not None:
+                        if hasattr(module, "load_state_dict"):
+                            # Only load those owned by module as well as data
+                            num_model_state_dict = len(module.state_dict().keys())
+                            num_ckp_state_dict = len(data.keys())
+                            if num_model_state_dict == num_ckp_state_dict:
+                                # If exact match, just load as normal
+                                module.load_state_dict(data)
+                            elif num_model_state_dict > num_ckp_state_dict:
+                                # There are more modules in the model than in the checkpoint
+                                model_dict = module.state_dict()
+                                ckp_dict = model_dict.copy()# {k: v for k, v in data.items() if k in model_dict}
+                                for key_name in data.keys():
+                                    ckp_dict[key_name] = data[key_name]
+                                module.load_state_dict(ckp_dict)
+                            else:
+                                # There are more modules in the checkpoint, we should only retain part of the modules from
+                                # the checkpoint
+                                model_dict = module.state_dict()
+                                ckp_dict = model_dict.copy()# {k: v for k, v in data.items() if k in model_dict}
+                                for key_name in model_dict.keys():
+                                    ckp_dict[key_name] = data[key_name]
+                                module.load_state_dict(ckp_dict)
+
+                            # module.load_state_dict(data)
+                            if hasattr(module, "eval"):
+                                module.eval()
+                        else:
+                            raise NotImplementedError
+                    else:
+                        logger.warning(f"Cannot load the {name} module. The agent doesn't have such an instance")
 
     def migrate(self,
                 path: str,
